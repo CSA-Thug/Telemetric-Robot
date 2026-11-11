@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Telemetry Dashboard</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://jsdelivr.net"></script>
+    <!-- Chart.js for real-time telemetry graphs -->
+    <script src="https://jsdelivr.net"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
+
+    <!-- Header / Status Bar -->
+    <header class="bg-slate-800 border-b border-slate-700 px-6 py-4 flex justify-between items-center shadow-lg">
+        <div class="flex items-center space-x-3">
+            <div class="h-3 w-3 bg-emerald-500 rounded-full animate-pulse" id="status-indicator"></div>
+            <h1 class="text-xl font-bold tracking-wide">ROBOTIC CONTROL UNIT</h1>
+        </div>
+        <div class="flex space-x-6 text-sm text-slate-400">
+            <div>IP: <span id="ip-display" class="font-mono text-slate-200">11.11.11.11</span></div>
+            <div>Latency: <span id="ping-display" class="font-mono text-emerald-400">12ms</span></div>
+        </div>
+    </header>
+
+    <!-- Main Dashboard Layout -->
+    <main class="flex-1 p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        <!-- Left & Center: Video Feed Container -->
+        <div class="lg:col-span-2 flex flex-col bg-slate-800 rounded-xl border border-slate-700 overflow-hidden shadow-xl">
+            <div class="px-4 py-3 bg-slate-750 border-b border-slate-700 flex justify-between items-center">
+                <span class="text-sm font-semibold tracking-wider text-slate-300">🔴 LIVE CAMERA FEED</span>
+                <span class="text-xs bg-slate-700 px-2 py-1 rounded text-slate-400 font-mono">MJPEG Stream</span>
+            </div>
+            <div class="flex-1 bg-black flex items-center justify-center relative min-h-[400px]">
+                <!-- Replace 'src' with your ESP32-CAM stream URL when ready (e.g., http://192.168.1) -->
+                <img id="video-feed" src="https://unsplash.com" alt="Robot Feed" class="w-full h-full object-cover">
+                
+                <!-- HUD Overlay -->
+                <div class="absolute top-4 left-4 font-mono text-xs bg-black/60 p-2 rounded text-emerald-400 border border-emerald-500/30 backdrop-blur-sm space-y-1">
+                    <div>CAM_FPS: 24</div>
+                    <div>RESOLUTION: 800x600</div>
+                    <div>RSSI: -64 dBm</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Telemetry Controls & Gauges -->
+        <div class="space-y-6 flex flex-col">
+            
+            <!-- Quick Stats Grid -->
+            <div class="grid grid-cols-2 gap-4">
+                <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
+                    <div class="text-xs text-slate-400 font-medium tracking-wider uppercase">Battery</div>
+                    <div class="text-2xl font-bold mt-1 font-mono text-amber-400" id="stat-battery">12.4V</div>
+                </div>
+                <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
+                    <div class="text-xs text-slate-400 font-medium tracking-wider uppercase">Proximity</div>
+                    <div class="text-2xl font-bold mt-1 font-mono text-blue-400" id="stat-distance">45 cm</div>
+                </div>
+                <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
+                    <div class="text-xs text-slate-400 font-medium tracking-wider uppercase">Speed</div>
+                    <div class="text-2xl font-bold mt-1 font-mono text-purple-400" id="stat-speed">0.0 m/s</div>
+                </div>
+                <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
+                    <div class="text-xs text-slate-400 font-medium tracking-wider uppercase">Heading</div>
+                    <div class="text-2xl font-bold mt-1 font-mono text-rose-400" id="stat-heading">182°</div>
+                </div>
+            </div>
+
+            <!-- Real-Time Chart -->
+            <div class="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg flex-1 flex flex-col min-h-[250px]">
+                <div class="text-sm font-semibold tracking-wider text-slate-300 mb-4">📈 SENSOR GRAPH (DISTANCE OVER TIME)</div>
+                <div class="flex-1 relative w-full">
+                    <canvas id="telemetryChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Footer / WebSocket Debug Config -->
+    <footer class="bg-slate-950 px-6 py-3 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-slate-500">
+        <div>System Version 1.0.4</div>
+        <div class="flex items-center space-x-2 w-full sm:w-auto">
+            <input type="text" id="ws-url" value="ws://192.168.1.50:81" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-300 font-mono text-center focus:outline-none focus:border-slate-500 w-full sm:w-48">
+            <button id="connect-btn" onclick="toggleWebSocket()" class="bg-blue-600 hover:bg-blue-500 text-white font-semibold px-4 py-1 rounded transition whitespace-nowrap">Connect Robot</button>
+        </div>
+    </footer>
+
+    <!-- Logic Layer -->
+    <script>
+        let webSocket;
+        let isConnected = false;
+        let mockInterval;
+
+        // Chart.js Configuration
+        const ctx = document.getElementById('telemetryChart').getContext('2d');
+        const telemetryChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Distance (cm)',
+                    data: [],
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.3,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
+                    y: { min: 0, max: 100, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } }
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        // Function to update layout data points
+        function updateDashboard(data) {
+            document.getElementById('stat-battery').innerText = `${data.battery.toFixed(1)}V`;
+            document.getElementById('stat-distance').innerText = `${data.distance} cm`;
+            document.getElementById('stat-speed').innerText = `${data.speed.toFixed(1)} m/s`;
+            document.getElementById('stat-heading').innerText = `${data.heading}°`;
+
+            // Update Chart
+            const timeStamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            telemetryChart.data.labels.push(timeStamp);
+            telemetryChart.data.datasets[0].data.push(data.distance);
+
+            // Keep only the last 10 data points on screen
+            if (telemetryChart.data.labels.length > 10) {
+                telemetryChart.data.labels.shift();
+                telemetryChart.data.datasets[0].data.shift();
+            }
+            telemetryChart.update();
+        }
+
+        // Production Mode: Live WebSocket Management
+        function toggleWebSocket() {
+            const url = document.getElementById('ws-url').value;
+            const btn = document.getElementById('connect-btn');
+            const indicator = document.getElementById('status-indicator');
+
+            if (isConnected) {
+                webSocket.close();
+                return;
+            }
+
+            // Stop mock data loop when attempts are made to connect to real hardware
+            clearInterval(mockInterval); 
+            
+            webSocket = new WebSocket(url);
+
+            webSocket.onopen = () => {
+                isConnected = true;
+                btn.innerText = "Disconnect";
+                btn.className = "bg-rose-600 hover:bg-rose-500 text-white font-semibold px-4 py-1 rounded transition whitespace-nowrap";
+                indicator.className = "h-3 w-3 bg-emerald-500 rounded-full animate-pulse";
+                // Point video tag to actual ESP32 camera server stream port
+                document.getElementById('video-feed').src = url.replace('ws://', 'http://') + '/stream';
+            };
+
+            webSocket.onmessage = (event) => {
+                try {
+                    // Expects a incoming JSON string from ESP32: {"battery":12.2, "distance":45, "speed":1.2, "heading":180}
+                    const data = JSON.parse(event.data);
+                    updateDashboard(data);
+                } catch (e) {
+                    console.error("Error parsing telemetry stream data:", e);
+                }
+            };
+
+            webSocket.onclose = () => {
+                isConnected = false;
+                btn.innerText = "Connect Robot";
+                btn.className = "bg-blue-600 hover:bg-blue-500 text-white font-semibold px-4 py-1 rounded transition whitespace-nowrap";
+                indicator.className = "h-3 w-3 bg-rose-500 rounded-full";
+                startMockData(); // Revert back to test simulation mode
+            };
+        }
+
+        // Demo Mode: Mock Data Loop Generator
+        function startMockData() {
+            mockInterval = setInterval(() => {
+                const mockData = {
+                    battery: 11.5 + Math.random() * 1.2,
+                    distance: Math.floor(20 + Math.random() * 60),
